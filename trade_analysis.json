@@ -1,0 +1,151 @@
+{
+  "summary": {
+    "total_trades": 5,
+    "winning_trades": 4,
+    "losing_trades": 1,
+    "win_rate": 80.0,
+    "avg_win": 367.63,
+    "avg_loss": -133.75,
+    "payoff_ratio": 2.75,
+    "total_pnl": 1336.75,
+    "total_commission": 10.25,
+    "expectancy": 267.35,
+    "avg_r_multiple": 0.74,
+    "max_drawdown": -133.75,
+    "max_drawdown_pct": -10.01
+  },
+  "setup_analysis": {
+    "breakout": {
+      "trades": 1,
+      "winners": 1,
+      "total_pnl": 552.5,
+      "avg_pnl": 552.5,
+      "win_rate": 100.0,
+      "avg_r": 1.11
+    },
+    "reversal": {
+      "trades": 1,
+      "winners": 1,
+      "total_pnl": 240.5,
+      "avg_pnl": 240.5,
+      "win_rate": 100.0,
+      "avg_r": 0.97
+    },
+    "pullback": {
+      "trades": 1,
+      "winners": 0,
+      "total_pnl": -133.75,
+      "avg_pnl": -133.75,
+      "win_rate": 0.0,
+      "avg_r": -0.88
+    },
+    "trend_follow": {
+      "trades": 1,
+      "winners": 1,
+      "total_pnl": 310.5,
+      "avg_pnl": 310.5,
+      "win_rate": 100.0,
+      "avg_r": 1.56
+    },
+    "hedge": {
+      "trades": 1,
+      "winners": 1,
+      "total_pnl": 367.0,
+      "avg_pnl": 367.0,
+      "win_rate": 100.0,
+      "avg_r": 0.92
+    }
+  },
+  "trades": [
+    {
+      "date": "2024-01-15",
+      "symbol": "AAPL",
+      "side": "long",
+      "entry_price": 150.25,
+      "exit_price": 155.8,
+      "quantity": 100,
+      "commission": 2.5,
+      "risk_amount": 500.0,
+      "setup": "breakout",
+      "notes": "Strong momentum after earnings",
+      "gross_pnl": 555.0000000000011,
+      "net_pnl": 552.5000000000011,
+      "is_winner": true,
+      "r_multiple": 1.1100000000000023,
+      "cumulative_pnl": 552.5000000000011,
+      "drawdown": 0.0
+    },
+    {
+      "date": "2024-01-16",
+      "symbol": "TSLA",
+      "side": "short",
+      "entry_price": 220.15,
+      "exit_price": 215.3,
+      "quantity": 50,
+      "commission": 2.0,
+      "risk_amount": 250.0,
+      "setup": "reversal",
+      "notes": "Overbought RSI signal",
+      "gross_pnl": 242.49999999999972,
+      "net_pnl": 240.49999999999972,
+      "is_winner": true,
+      "r_multiple": 0.9699999999999989,
+      "cumulative_pnl": 793.0000000000009,
+      "drawdown": 0.0
+    },
+    {
+      "date": "2024-01-17",
+      "symbol": "MSFT",
+      "side": "long",
+      "entry_price": 380.5,
+      "exit_price": 375.2,
+      "quantity": 25,
+      "commission": 1.25,
+      "risk_amount": 150.0,
+      "setup": "pullback",
+      "notes": "Failed support test",
+      "gross_pnl": -132.50000000000028,
+      "net_pnl": -133.75000000000028,
+      "is_winner": false,
+      "r_multiple": -0.8833333333333352,
+      "cumulative_pnl": 659.2500000000007,
+      "drawdown": -133.75000000000023
+    },
+    {
+      "date": "2024-01-18",
+      "symbol": "NVDA",
+      "side": "long",
+      "entry_price": 480.0,
+      "exit_price": 495.6,
+      "quantity": 20,
+      "commission": 1.5,
+      "risk_amount": 200.0,
+      "setup": "trend_follow",
+      "notes": "AI sector strength",
+      "gross_pnl": 312.00000000000045,
+      "net_pnl": 310.50000000000045,
+      "is_winner": true,
+      "r_multiple": 1.5600000000000023,
+      "cumulative_pnl": 969.7500000000011,
+      "drawdown": 0.0
+    },
+    {
+      "date": "2024-01-19",
+      "symbol": "SPY",
+      "side": "short",
+      "entry_price": 475.8,
+      "exit_price": 472.1,
+      "quantity": 100,
+      "commission": 3.0,
+      "risk_amount": 400.0,
+      "setup": "hedge",
+      "notes": "Market weakness",
+      "gross_pnl": 369.99999999999886,
+      "net_pnl": 366.99999999999886,
+      "is_winner": true,
+      "r_multiple": 0.9249999999999972,
+      "cumulative_pnl": 1336.75,
+      "drawdown": 0.0
+    }
+  ]
+}
