@@ -225,6 +225,9 @@
       <label class="field">Quantità
         <input type="number" id="tQty" step="any" min="0" required>
       </label>
+      <label class="field">Stop loss
+        <input type="number" id="tStop" step="any" min="0" placeholder="per calcolo R">
+      </label>
       <div style="display:flex; gap:8px">
         <button type="submit" id="tradeSubmitBtn">Aggiungi trade</button>
         <button type="button" class="secondary" id="tradeCancelBtn" style="display:none">Annulla</button>
@@ -243,8 +246,10 @@
         <tr>
           <th>#</th><th>Simbolo</th><th>Dir.</th><th>Ingresso</th>
           <th class="num">Prezzo in</th><th class="num">Qtà</th>
+          <th class="num" title="Valore della posizione in % dell'equity al momento dell'ingresso">% Ptf</th>
           <th class="num">Uscite</th><th class="num">Qtà residua</th>
           <th class="num">P&amp;L realizzato</th><th class="num">Rend. %</th>
+          <th class="num" title="P&L realizzato in multipli del rischio iniziale (1R = distanza ingresso-stop × quantità)">R</th>
           <th>Stato</th><th>Azioni</th>
         </tr>
       </thead>
@@ -328,7 +333,11 @@ function tradeDerived(t) {
   const pct = costExited > 0 ? (realized / costExited) * 100 : null;
   const status = t.exits.length === 0 ? 'open' : (remaining > 1e-9 ? 'partial' : 'closed');
   const lastExitDate = t.exits.length ? t.exits.map(e => e.date).sort().at(-1) : null;
-  return { exitedQty, remaining, realized, pct, status, lastExitDate };
+  // rischio iniziale dallo stop loss: 1R = distanza ingresso-stop × quantità
+  const riskPerUnit = t.stop != null ? Math.abs(t.entryPrice - t.stop) : null;
+  const initialRisk = riskPerUnit != null && riskPerUnit > 0 ? riskPerUnit * t.qty : null;
+  const rMultiple = initialRisk != null && exitedQty > 0 ? realized / initialRisk : null;
+  return { exitedQty, remaining, realized, pct, status, lastExitDate, riskPerUnit, initialRisk, rMultiple };
 }
 function computeStats() {
   const pid = PERIODS.some(p => p.id === state.period) ? state.period : 'all';
@@ -349,6 +358,16 @@ function computeStats() {
 
   const totalRealizedAll = events.reduce((s, e) => s + e.pnl, 0);
   const equityNow = cap != null ? cap + totalRealizedAll : null;
+
+  // per ogni trade: equity al momento dell'ingresso → % portafoglio e % rischio
+  for (const x of withD) {
+    const eqEntry = cap != null
+      ? cap + events.filter(e => e.date < x.t.entryDate).reduce((s, e) => s + e.pnl, 0)
+      : null;
+    x.equityAtEntry = eqEntry;
+    x.ptfPct = eqEntry > 0 ? (x.t.entryPrice * x.t.qty) / eqEntry * 100 : null;
+    x.riskPct = eqEntry > 0 && x.d.initialRisk != null ? x.d.initialRisk / eqEntry * 100 : null;
+  }
   // equity a inizio periodo = capitale + P&L realizzato prima del periodo
   const realizedBefore = from ? events.filter(e => e.date < from).reduce((s, e) => s + e.pnl, 0) : 0;
   const equityStart = cap != null ? cap + realizedBefore : null;
@@ -381,6 +400,15 @@ function computeStats() {
       s + Math.max(0, (new Date(x.d.lastExitDate) - new Date(x.t.entryDate)) / 86400000), 0);
     avgDays = tot / closed.length;
   }
+  // statistiche in R (trade chiusi nel periodo con stop loss)
+  const closedR = closed.filter(x => x.d.rMultiple != null);
+  const totR = closedR.reduce((s, x) => s + x.d.rMultiple, 0);
+  const avgR = closedR.length ? totR / closedR.length : null;
+  const avgRiskPct = (() => {
+    const withRisk = closed.filter(x => x.riskPct != null);
+    return withRisk.length ? withRisk.reduce((s, x) => s + x.riskPct, 0) / withRisk.length : null;
+  })();
+
   // curva equity del periodo: parte dall'equity a inizio periodo
   const curve = [];
   if (cap != null) {
@@ -401,7 +429,8 @@ function computeStats() {
   return { withD, closed, openCount, pnlPeriod, equityNow, equityStart, winRate, profitFactor,
            avgWin, avgLoss, expectancy, best, worst, avgDays, curve,
            maxDD: curve.length ? maxDD : null, maxDDPct, grossProfit, grossLoss,
-           from, to, filtered, period, hasAnyExit: events.length > 0 };
+           from, to, filtered, period, hasAnyExit: events.length > 0,
+           avgR, totR, nClosedR: closedR.length, avgRiskPct };
 }
 
 /* ---------------- formattazione ---------------- */
@@ -415,6 +444,7 @@ function fmtDate(d) {
   return `${g}/${m}/${y}`;
 }
 function signClass(v) { return v > 0 ? 'pos' : v < 0 ? 'neg' : ''; }
+function fmtR(v) { return v == null || !isFinite(v) ? '—' : (v >= 0 ? '+' : '') + v.toLocaleString('it-IT', { maximumFractionDigits: 2 }) + 'R'; }
 function esc(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 
@@ -429,6 +459,7 @@ function renderStats(S) {
     { label: 'Win rate', value: fmtPct(S.winRate), sub: `${S.closed.length} chiusi${inPeriod ? ' nel periodo' : ''} · ${S.openCount} aperti/parziali`, cls: '' },
     { label: 'Profit factor', value: pf, sub: `lordo +${fmtEur(S.grossProfit)} / −${fmtEur(S.grossLoss)}`, cls: '' },
     { label: 'Expectancy / trade', value: fmtEur(S.expectancy), sub: 'media P&L sui trade chiusi', cls: signClass(S.expectancy ?? 0) },
+    { label: 'R medio / trade', value: fmtR(S.avgR), sub: S.nClosedR ? `ΣR ${fmtR(S.totR)} su ${S.nClosedR} trade con stop` + (S.avgRiskPct != null ? ` · rischio medio ${fmtPct(S.avgRiskPct, 2)}` : '') : 'imposta lo stop loss sui trade', cls: signClass(S.avgR ?? 0) },
     { label: 'Vincita media', value: fmtEur(S.avgWin), sub: S.avgLoss != null && S.avgWin != null && S.avgLoss > 0 ? 'R medio ' + (S.avgWin / S.avgLoss).toLocaleString('it-IT', { maximumFractionDigits: 2 }) : '', cls: 'pos' },
     { label: 'Perdita media', value: S.avgLoss == null ? '—' : '−' + fmtEur(S.avgLoss).replace('-', ''), sub: '', cls: S.avgLoss ? 'neg' : '' },
     { label: 'Max drawdown', value: S.maxDD == null ? '—' : '−' + fmtEur(S.maxDD).replace('-', ''), sub: S.maxDD ? fmtPct(-S.maxDDPct, 1) + ' dal picco' : '', cls: S.maxDD ? 'neg' : '' },
@@ -626,7 +657,8 @@ function renderTable(S) {
   const body = document.getElementById('tradesBody');
   document.getElementById('tableEmpty').style.display = state.trades.length ? 'none' : 'block';
   body.innerHTML = '';
-  S.withD.forEach(({ t, d }, idx) => {
+  S.withD.forEach((x, idx) => {
+    const { t, d } = x;
     const tr = document.createElement('tr');
     tr.innerHTML =
       `<td>${idx + 1}</td>` +
@@ -635,10 +667,12 @@ function renderTable(S) {
       `<td>${fmtDate(t.entryDate)}</td>` +
       `<td class="num">${numFmt.format(t.entryPrice)}</td>` +
       `<td class="num">${numFmt.format(t.qty)}</td>` +
+      `<td class="num">${fmtPct(x.ptfPct, 1)}</td>` +
       `<td class="num">${t.exits.length}/${MAX_EXITS}</td>` +
       `<td class="num">${numFmt.format(d.remaining)}</td>` +
       `<td class="num ${signClass(d.realized)}">${d.exitedQty ? (d.realized >= 0 ? '+' : '') + fmtEur(d.realized) : '—'}</td>` +
       `<td class="num ${signClass(d.realized)}">${fmtPct(d.pct, 2)}</td>` +
+      `<td class="num ${signClass(d.rMultiple ?? 0)}">${fmtR(d.rMultiple)}</td>` +
       `<td><span class="badge ${d.status}">${statusLabel[d.status]}</span></td>` +
       `<td>
         <button class="secondary small" data-act="toggle" data-id="${t.id}">${expandedId === t.id ? 'Chiudi' : 'Uscite'}</button>
@@ -646,14 +680,36 @@ function renderTable(S) {
         <button class="danger small" data-act="del" data-id="${t.id}">Elimina</button>
       </td>`;
     body.appendChild(tr);
-    if (expandedId === t.id) body.appendChild(buildDetailRow(t, d));
+    if (expandedId === t.id) body.appendChild(buildDetailRow(x));
   });
 }
-function buildDetailRow(t, d) {
+function riskReasoning(x) {
+  const { t, d } = x;
+  const posValue = t.entryPrice * t.qty;
+  const parts = [];
+  parts.push(`<strong>Posizione:</strong> ${fmtEur(posValue)}` +
+    (x.ptfPct != null ? ` = <strong>${fmtPct(x.ptfPct, 1)}</strong> del portafoglio (equity all'ingresso ${fmtEur(x.equityAtEntry)})` : '') + '.');
+  if (d.initialRisk != null) {
+    parts.push(`<strong>Stop loss ${numFmt.format(t.stop)}:</strong> distanza ${numFmt.format(d.riskPerUnit)} dal prezzo di ingresso → rischio iniziale <strong>1R = ${fmtEur(d.initialRisk)}</strong>` +
+      (x.riskPct != null ? ` (${fmtPct(x.riskPct, 2)} del portafoglio)` : '') + '.');
+    if (d.exitedQty > 0) {
+      const cls = signClass(d.realized);
+      parts.push(`<strong>P&L realizzato:</strong> <span class="${cls}">${(d.realized >= 0 ? '+' : '') + fmtEur(d.realized)} = ${fmtR(d.rMultiple)}</span>` +
+        (d.status !== 'closed' ? ' (posizione ancora aperta in parte)' : '') + '.');
+    } else {
+      parts.push(`Se lo stop scatta perdi ${fmtEur(d.initialRisk)}; ogni ${fmtEur(d.initialRisk)} di profitto vale +1R.`);
+    }
+  } else {
+    parts.push('Nessuno stop loss registrato: aggiungilo con “Modifica” per calcolare il rischio e le R.');
+  }
+  return `<div class="form-msg" style="margin:0 0 12px">${parts.join('<br>')}</div>`;
+}
+function buildDetailRow(x) {
+  const { t, d } = x;
   const tr = document.createElement('tr');
   tr.className = 'detail-row';
   const td = document.createElement('td');
-  td.colSpan = 12;
+  td.colSpan = 14;
   let exitsHtml = '<div class="empty-msg" style="padding:8px 0">Nessuna uscita registrata.</div>';
   if (t.exits.length) {
     exitsHtml = '<table><thead><tr><th>Uscita</th><th>Data</th><th class="num">Prezzo</th><th class="num">Quantità</th><th class="num">P&L</th><th></th></tr></thead><tbody>' +
@@ -680,7 +736,7 @@ function buildDetailRow(t, d) {
         <div class="form-msg error" data-role="msg"></div>
       </form>`;
   }
-  td.innerHTML = `<div class="exits-list">${exitsHtml}</div>${formHtml}`;
+  td.innerHTML = riskReasoning(x) + `<div class="exits-list">${exitsHtml}</div>${formHtml}`;
   tr.appendChild(td);
   return tr;
 }
@@ -759,19 +815,24 @@ tradeForm.addEventListener('submit', ev => {
   const entryDate = document.getElementById('tDate').value;
   const entryPrice = parseFloat(document.getElementById('tPrice').value);
   const qty = parseFloat(document.getElementById('tQty').value);
+  const stopRaw = document.getElementById('tStop').value;
+  const stop = stopRaw === '' ? null : parseFloat(stopRaw);
   if (!symbol || !entryDate || !(entryPrice > 0) || !(qty > 0)) {
     setTradeMsg('Compila tutti i campi con valori validi (prezzo e quantità > 0).', 'error'); return;
+  }
+  if (stop != null && (!(stop > 0) || (side === 'long' && stop >= entryPrice) || (side === 'short' && stop <= entryPrice))) {
+    setTradeMsg(side === 'long' ? 'Per un long lo stop loss deve essere sotto il prezzo di ingresso.' : 'Per uno short lo stop loss deve essere sopra il prezzo di ingresso.', 'error'); return;
   }
   if (editingId != null) {
     const t = state.trades.find(x => x.id === editingId);
     if (t) {
       const exited = t.exits.reduce((s, e) => s + e.qty, 0);
       if (qty < exited - 1e-9) { setTradeMsg(`La quantità non può essere inferiore a quella già uscita (${numFmt.format(exited)}).`, 'error'); return; }
-      Object.assign(t, { symbol, side, entryDate, entryPrice, qty });
+      Object.assign(t, { symbol, side, entryDate, entryPrice, qty, stop });
       setTradeMsg('Trade aggiornato.', 'ok');
     }
   } else {
-    state.trades.push({ id: Date.now() + Math.random(), symbol, side, entryDate, entryPrice, qty, exits: [] });
+    state.trades.push({ id: Date.now() + Math.random(), symbol, side, entryDate, entryPrice, qty, stop, exits: [] });
     setTradeMsg('Trade aggiunto. Registra le uscite dal pulsante “Uscite” in tabella.', 'ok');
   }
   save(); resetTradeForm(); renderAll();
@@ -796,6 +857,7 @@ document.getElementById('tradesBody').addEventListener('click', ev => {
     document.getElementById('tDate').value = t.entryDate;
     document.getElementById('tPrice').value = t.entryPrice;
     document.getElementById('tQty').value = t.qty;
+    document.getElementById('tStop').value = t.stop ?? '';
     document.getElementById('tradeFormTitle').textContent = `Modifica trade — ${t.symbol}`;
     document.getElementById('tradeSubmitBtn').textContent = 'Salva modifiche';
     document.getElementById('tradeCancelBtn').style.display = '';
@@ -849,10 +911,10 @@ document.getElementById('exportJsonBtn').addEventListener('click', () => {
   download('tradelog-backup.json', JSON.stringify(state, null, 2), 'application/json');
 });
 document.getElementById('exportCsvBtn').addEventListener('click', () => {
-  const rows = [['simbolo','direzione','data_ingresso','prezzo_ingresso','quantita','n_uscita','data_uscita','prezzo_uscita','quantita_uscita','pnl_uscita']];
+  const rows = [['simbolo','direzione','data_ingresso','prezzo_ingresso','stop_loss','quantita','n_uscita','data_uscita','prezzo_uscita','quantita_uscita','pnl_uscita']];
   for (const t of state.trades) {
-    if (!t.exits.length) rows.push([t.symbol, t.side, t.entryDate, t.entryPrice, t.qty, '', '', '', '', '']);
-    t.exits.forEach((ex, i) => rows.push([t.symbol, t.side, t.entryDate, t.entryPrice, t.qty, i + 1, ex.date, ex.price, ex.qty, exitPnl(t, ex).toFixed(2)]));
+    if (!t.exits.length) rows.push([t.symbol, t.side, t.entryDate, t.entryPrice, t.stop ?? '', t.qty, '', '', '', '', '']);
+    t.exits.forEach((ex, i) => rows.push([t.symbol, t.side, t.entryDate, t.entryPrice, t.stop ?? '', t.qty, i + 1, ex.date, ex.price, ex.qty, exitPnl(t, ex).toFixed(2)]));
   }
   const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
   download('tradelog.csv', csv, 'text/csv');
