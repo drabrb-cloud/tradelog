@@ -60,6 +60,17 @@
   .capital-box { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .capital-box label { font-size: .85rem; color: var(--text-secondary); }
 
+  /* ---- selettore periodo ---- */
+  .period-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 16px; }
+  .period-bar .plabel { font-size: .8rem; color: var(--text-secondary); margin-right: 4px; }
+  .chip {
+    font-size: .8rem; font-weight: 600; padding: 5px 12px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
+  }
+  .chip.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .period-range { font-size: .75rem; color: var(--muted); margin-left: 6px; }
+  .ptag { color: var(--muted); font-weight: 400; font-size: .8rem; }
+
   .card {
     background: var(--surface-1);
     border: 1px solid var(--border);
@@ -173,17 +184,20 @@
   </div>
 </header>
 
+<!-- Selettore periodo -->
+<section class="period-bar" id="periodBar" role="group" aria-label="Filtro periodo"></section>
+
 <!-- Statistiche -->
 <section class="stats-grid" id="statsGrid"></section>
 
 <!-- Grafici -->
 <section class="charts">
   <div class="card chart-box">
-    <h2>Curva equity (P&amp;L realizzato)</h2>
+    <h2>Curva equity (P&amp;L realizzato) <span class="ptag" id="eqPtag"></span></h2>
     <div id="equityChart"></div>
   </div>
   <div class="card chart-box">
-    <h2>P&amp;L per trade chiuso</h2>
+    <h2>P&amp;L per trade chiuso <span class="ptag" id="pnlPtag"></span></h2>
     <div id="pnlChart"></div>
   </div>
 </section>
@@ -272,6 +286,29 @@ function load() {
 }
 function save() { localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
 
+/* ---------------- periodi ---------------- */
+const PERIODS = [
+  { id: 'all', label: 'Tutto', long: null },
+  { id: 'mtd', label: 'MTD', long: 'mese corrente' },
+  { id: 'ytd', label: 'YTD', long: 'anno corrente' },
+  { id: 'd7',  label: '7 gg',  days: 7,  long: 'ultimi 7 giorni' },
+  { id: 'd10', label: '10 gg', days: 10, long: 'ultimi 10 giorni' },
+  { id: 'd30', label: '30 gg', days: 30, long: 'ultimi 30 giorni' },
+  { id: 'd60', label: '60 gg', days: 60, long: 'ultimi 60 giorni' },
+  { id: 'd90', label: '90 gg', days: 90, long: 'ultimi 90 giorni' },
+];
+function isoDate(d) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function periodFrom(id) {
+  const now = new Date();
+  if (id === 'mtd') return isoDate(new Date(now.getFullYear(), now.getMonth(), 1));
+  if (id === 'ytd') return isoDate(new Date(now.getFullYear(), 0, 1));
+  const p = PERIODS.find(p => p.id === id);
+  if (p && p.days) { const d = new Date(now); d.setDate(d.getDate() - (p.days - 1)); return isoDate(d); }
+  return null; // 'all'
+}
+
 /* ---------------- calcoli ---------------- */
 function exitPnl(trade, ex) {
   return trade.side === 'long'
@@ -289,12 +326,31 @@ function tradeDerived(t) {
   return { exitedQty, remaining, realized, pct, status, lastExitDate };
 }
 function computeStats() {
+  const pid = PERIODS.some(p => p.id === state.period) ? state.period : 'all';
+  const period = PERIODS.find(p => p.id === pid);
+  const from = periodFrom(pid);
+
   const withD = state.trades.map(t => ({ t, d: tradeDerived(t) }));
-  const closed = withD.filter(x => x.d.status === 'closed');
-  const open = withD.filter(x => x.d.status !== 'closed');
-  const totalRealized = withD.reduce((s, x) => s + x.d.realized, 0);
+  const openCount = withD.filter(x => x.d.status !== 'closed').length;
   const cap = state.initialCapital;
-  const equity = cap != null ? cap + totalRealized : null;
+
+  // tutti gli eventi di uscita, in ordine di data
+  const events = [];
+  for (const { t } of withD)
+    for (const ex of t.exits)
+      events.push({ date: ex.date, symbol: t.symbol, pnl: exitPnl(t, ex) });
+  events.sort((a, b) => a.date.localeCompare(b.date));
+
+  const totalRealizedAll = events.reduce((s, e) => s + e.pnl, 0);
+  const equityNow = cap != null ? cap + totalRealizedAll : null;
+  // equity a inizio periodo = capitale + P&L realizzato prima del periodo
+  const realizedBefore = from ? events.filter(e => e.date < from).reduce((s, e) => s + e.pnl, 0) : 0;
+  const equityStart = cap != null ? cap + realizedBefore : null;
+  const eventsIn = from ? events.filter(e => e.date >= from) : events;
+  const pnlPeriod = eventsIn.reduce((s, e) => s + e.pnl, 0);
+
+  // trade chiusi la cui chiusura (ultima uscita) cade nel periodo
+  const closed = withD.filter(x => x.d.status === 'closed' && (!from || x.d.lastExitDate >= from));
 
   const wins = closed.filter(x => x.d.realized > 0);
   const losses = closed.filter(x => x.d.realized < 0);
@@ -311,38 +367,34 @@ function computeStats() {
     if (!best || x.d.realized > best.d.realized) best = x;
     if (!worst || x.d.realized < worst.d.realized) worst = x;
   }
-  // durata media (trade chiusi): giorni tra ingresso e ultima uscita
+  // durata media (trade chiusi nel periodo): giorni tra ingresso e ultima uscita
   let avgDays = null;
   if (closed.length) {
     const tot = closed.reduce((s, x) =>
       s + Math.max(0, (new Date(x.d.lastExitDate) - new Date(x.t.entryDate)) / 86400000), 0);
     avgDays = tot / closed.length;
   }
-  // curva equity: eventi di uscita in ordine di data
-  const events = [];
-  for (const { t } of withD)
-    for (const ex of t.exits)
-      events.push({ date: ex.date, symbol: t.symbol, pnl: exitPnl(t, ex) });
-  events.sort((a, b) => a.date.localeCompare(b.date));
+  // curva equity del periodo: parte dall'equity a inizio periodo
   const curve = [];
   if (cap != null) {
-    let eq = cap;
-    curve.push({ date: null, label: 'Inizio', equity: eq, pnl: 0, symbol: null });
-    for (const ev of events) {
+    let eq = equityStart;
+    curve.push({ date: null, label: from ? 'Inizio periodo' : 'Inizio', equity: eq, pnl: 0, symbol: null });
+    for (const ev of eventsIn) {
       eq += ev.pnl;
       curve.push({ date: ev.date, label: ev.date, equity: eq, pnl: ev.pnl, symbol: ev.symbol });
     }
   }
-  // max drawdown sulla curva
+  // max drawdown sulla curva del periodo
   let maxDD = 0, maxDDPct = 0, peak = -Infinity;
   for (const p of curve) {
     peak = Math.max(peak, p.equity);
     const dd = peak - p.equity;
     if (dd > maxDD) { maxDD = dd; maxDDPct = peak > 0 ? dd / peak * 100 : 0; }
   }
-  return { withD, closed, open, totalRealized, equity, winRate, profitFactor,
+  return { withD, closed, openCount, pnlPeriod, equityNow, equityStart, winRate, profitFactor,
            avgWin, avgLoss, expectancy, best, worst, avgDays, curve,
-           maxDD: curve.length ? maxDD : null, maxDDPct, grossProfit, grossLoss };
+           maxDD: curve.length ? maxDD : null, maxDDPct, grossProfit, grossLoss,
+           from, period, hasAnyExit: events.length > 0 };
 }
 
 /* ---------------- formattazione ---------------- */
@@ -361,12 +413,13 @@ function cssVar(name) { return getComputedStyle(document.documentElement).getPro
 
 /* ---------------- render: statistiche ---------------- */
 function renderStats(S) {
-  const roiPct = (state.initialCapital > 0) ? S.totalRealized / state.initialCapital * 100 : null;
+  const inPeriod = !!S.from;
+  const roiPct = (S.equityStart > 0) ? S.pnlPeriod / S.equityStart * 100 : null;
   const pf = S.profitFactor === Infinity ? '∞' : (S.profitFactor == null ? '—' : S.profitFactor.toLocaleString('it-IT', { maximumFractionDigits: 2 }));
   const tiles = [
-    { label: 'Equity attuale', value: fmtEur(S.equity), sub: state.initialCapital != null ? 'iniziale ' + fmtEur(state.initialCapital) : 'imposta il capitale iniziale', cls: '' },
-    { label: 'P&L realizzato', value: fmtEur(S.totalRealized), sub: roiPct != null ? fmtPct(roiPct, 2) + ' sul capitale' : '', cls: signClass(S.totalRealized) },
-    { label: 'Win rate', value: fmtPct(S.winRate), sub: `${S.closed.length} chiusi · ${S.open.length} aperti/parziali`, cls: '' },
+    { label: 'Equity attuale', value: fmtEur(S.equityNow), sub: state.initialCapital != null ? 'iniziale ' + fmtEur(state.initialCapital) : 'imposta il capitale iniziale', cls: '' },
+    { label: inPeriod ? 'P&L (periodo)' : 'P&L realizzato', value: fmtEur(S.pnlPeriod), sub: roiPct != null ? fmtPct(roiPct, 2) + (inPeriod ? ' da inizio periodo' : ' sul capitale') : '', cls: signClass(S.pnlPeriod) },
+    { label: 'Win rate', value: fmtPct(S.winRate), sub: `${S.closed.length} chiusi${inPeriod ? ' nel periodo' : ''} · ${S.openCount} aperti/parziali`, cls: '' },
     { label: 'Profit factor', value: pf, sub: `lordo +${fmtEur(S.grossProfit)} / −${fmtEur(S.grossLoss)}`, cls: '' },
     { label: 'Expectancy / trade', value: fmtEur(S.expectancy), sub: 'media P&L sui trade chiusi', cls: signClass(S.expectancy ?? 0) },
     { label: 'Vincita media', value: fmtEur(S.avgWin), sub: S.avgLoss != null && S.avgWin != null && S.avgLoss > 0 ? 'R medio ' + (S.avgWin / S.avgLoss).toLocaleString('it-IT', { maximumFractionDigits: 2 }) : '', cls: 'pos' },
@@ -375,7 +428,7 @@ function renderStats(S) {
     { label: 'Miglior trade', value: S.best ? fmtEur(S.best.d.realized) : '—', sub: S.best ? S.best.t.symbol : '', cls: S.best ? signClass(S.best.d.realized) : '' },
     { label: 'Peggior trade', value: S.worst ? fmtEur(S.worst.d.realized) : '—', sub: S.worst ? S.worst.t.symbol : '', cls: S.worst ? signClass(S.worst.d.realized) : '' },
     { label: 'Durata media', value: S.avgDays == null ? '—' : S.avgDays.toLocaleString('it-IT', { maximumFractionDigits: 1 }) + ' gg', sub: 'ingresso → ultima uscita', cls: '' },
-    { label: 'Trade totali', value: String(state.trades.length), sub: `${S.closed.length} chiusi`, cls: '' },
+    { label: inPeriod ? 'Trade chiusi (periodo)' : 'Trade chiusi', value: String(S.closed.length), sub: `${state.trades.length} trade totali`, cls: '' },
   ];
   document.getElementById('statsGrid').innerHTML = tiles.map(t =>
     `<div class="tile"><div class="label">${t.label}</div><div class="value ${t.cls}">${t.value}</div><div class="sub">${esc(t.sub)}</div></div>`
@@ -418,7 +471,10 @@ function renderEquityChart(S) {
   const box = document.getElementById('equityChart');
   box.innerHTML = '';
   if (!S.curve.length || S.curve.length < 2) {
-    box.innerHTML = `<div class="empty-msg">${state.initialCapital == null ? 'Imposta il capitale iniziale per vedere la curva equity.' : 'La curva compare dopo la prima uscita registrata.'}</div>`;
+    const msg = state.initialCapital == null ? 'Imposta il capitale iniziale per vedere la curva equity.'
+      : (S.hasAnyExit && S.from) ? 'Nessuna uscita nel periodo selezionato.'
+      : 'La curva compare dopo la prima uscita registrata.';
+    box.innerHTML = `<div class="empty-msg">${msg}</div>`;
     return;
   }
   const W = box.clientWidth || 500, H = 260;
@@ -456,9 +512,9 @@ function renderEquityChart(S) {
   const endLab = el('text', { x: Math.min(x(last), W - m.right) - 4, y: Math.max(m.top + 10, y(pts[last].equity) - 8), 'text-anchor': 'end', fill: cssVar('--text-primary'), 'font-size': 11, 'font-weight': 600 });
   endLab.textContent = fmtEur(pts[last].equity);
   svg.appendChild(endLab);
-  // livello capitale iniziale
-  if (state.initialCapital >= lo && state.initialCapital <= hi) {
-    svg.appendChild(el('line', { x1: m.left, x2: W - m.right, y1: y(state.initialCapital), y2: y(state.initialCapital), stroke: cssVar('--baseline'), 'stroke-width': 1, 'stroke-dasharray': '4 4' }));
+  // livello equity a inizio periodo (= capitale iniziale con filtro "Tutto")
+  if (S.equityStart >= lo && S.equityStart <= hi) {
+    svg.appendChild(el('line', { x1: m.left, x2: W - m.right, y1: y(S.equityStart), y2: y(S.equityStart), stroke: cssVar('--baseline'), 'stroke-width': 1, 'stroke-dasharray': '4 4' }));
   }
   // crosshair + tooltip
   const cross = el('line', { y1: m.top, y2: H - m.bottom, stroke: cssVar('--baseline'), 'stroke-width': 1, visibility: 'hidden' });
@@ -490,7 +546,7 @@ function renderPnlChart(S) {
     .slice()
     .sort((a, b) => (a.d.lastExitDate || '').localeCompare(b.d.lastExitDate || ''));
   if (!closed.length) {
-    box.innerHTML = '<div class="empty-msg">Il grafico compare quando chiudi il primo trade.</div>';
+    box.innerHTML = `<div class="empty-msg">${S.from ? 'Nessun trade chiuso nel periodo selezionato.' : 'Il grafico compare quando chiudi il primo trade.'}</div>`;
     return;
   }
   const W = box.clientWidth || 500, H = 260;
@@ -622,9 +678,28 @@ function buildDetailRow(t, d) {
   return tr;
 }
 
+/* ---------------- render: barra periodo ---------------- */
+function renderPeriodBar(S) {
+  const bar = document.getElementById('periodBar');
+  const active = S.period.id;
+  bar.innerHTML = '<span class="plabel">Periodo</span>' +
+    PERIODS.map(p => `<button type="button" class="chip${active === p.id ? ' active' : ''}" data-period="${p.id}" aria-pressed="${active === p.id}">${p.label}</button>`).join('') +
+    `<span class="period-range">${S.from ? 'dal ' + fmtDate(S.from) + ' a oggi' : 'tutte le date'}</span>`;
+  const tag = S.period.long ? '· ' + S.period.long : '';
+  document.getElementById('eqPtag').textContent = tag;
+  document.getElementById('pnlPtag').textContent = tag;
+}
+document.getElementById('periodBar').addEventListener('click', ev => {
+  const b = ev.target.closest('button[data-period]');
+  if (!b) return;
+  state.period = b.dataset.period;
+  save(); renderAll();
+});
+
 /* ---------------- render globale ---------------- */
 function renderAll() {
   const S = computeStats();
+  renderPeriodBar(S);
   renderStats(S);
   renderEquityChart(S);
   renderPnlChart(S);
