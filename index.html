@@ -41,6 +41,41 @@
       --shadow: 0 1px 3px rgba(0,0,0,0.4);
     }
   }
+  /* toggle manuale del tema (es. visualizzatore claude.ai): vince sulla preferenza di sistema */
+  :root[data-theme="dark"] {
+    --surface-1: #1a1a19;
+    --page: #0d0d0d;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --baseline: #383835;
+    --border: rgba(255,255,255,0.10);
+    --series-pos: #3987e5;
+    --series-neg: #e66767;
+    --good-text: #0ca30c;
+    --bad-text: #e66767;
+    --accent: #3987e5;
+    --input-bg: #242423;
+    --shadow: 0 1px 3px rgba(0,0,0,0.4);
+  }
+  :root[data-theme="light"] {
+    --surface-1: #fcfcfb;
+    --page: #f9f9f7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11,11,11,0.10);
+    --series-pos: #2a78d6;
+    --series-neg: #e34948;
+    --good-text: #006300;
+    --bad-text: #b32626;
+    --accent: #2a78d6;
+    --input-bg: #ffffff;
+    --shadow: 0 1px 3px rgba(0,0,0,0.06);
+  }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -948,6 +983,7 @@ document.getElementById('resetBtn').addEventListener('click', () => {
 let resizeTimer;
 window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(renderAll, 150); });
 if (window.matchMedia) window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', renderAll);
+new MutationObserver(renderAll).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
 load();
 if (state.initialCapital != null) capInput.value = state.initialCapital;
