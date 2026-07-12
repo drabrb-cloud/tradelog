@@ -296,6 +296,7 @@ const PERIODS = [
   { id: 'd30', label: '30 gg', days: 30, long: 'ultimi 30 giorni' },
   { id: 'd60', label: '60 gg', days: 60, long: 'ultimi 60 giorni' },
   { id: 'd90', label: '90 gg', days: 90, long: 'ultimi 90 giorni' },
+  { id: 'custom', label: 'Personalizzato', long: 'periodo personalizzato' },
 ];
 function isoDate(d) {
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
@@ -307,6 +308,10 @@ function periodFrom(id) {
   const p = PERIODS.find(p => p.id === id);
   if (p && p.days) { const d = new Date(now); d.setDate(d.getDate() - (p.days - 1)); return isoDate(d); }
   return null; // 'all'
+}
+function periodRange(pid) {
+  if (pid === 'custom') return { from: state.customFrom || null, to: state.customTo || null };
+  return { from: periodFrom(pid), to: null };
 }
 
 /* ---------------- calcoli ---------------- */
@@ -328,7 +333,8 @@ function tradeDerived(t) {
 function computeStats() {
   const pid = PERIODS.some(p => p.id === state.period) ? state.period : 'all';
   const period = PERIODS.find(p => p.id === pid);
-  const from = periodFrom(pid);
+  const { from, to } = periodRange(pid);
+  const filtered = !!(from || to);
 
   const withD = state.trades.map(t => ({ t, d: tradeDerived(t) }));
   const openCount = withD.filter(x => x.d.status !== 'closed').length;
@@ -346,11 +352,12 @@ function computeStats() {
   // equity a inizio periodo = capitale + P&L realizzato prima del periodo
   const realizedBefore = from ? events.filter(e => e.date < from).reduce((s, e) => s + e.pnl, 0) : 0;
   const equityStart = cap != null ? cap + realizedBefore : null;
-  const eventsIn = from ? events.filter(e => e.date >= from) : events;
+  const inRange = d => (!from || d >= from) && (!to || d <= to);
+  const eventsIn = filtered ? events.filter(e => inRange(e.date)) : events;
   const pnlPeriod = eventsIn.reduce((s, e) => s + e.pnl, 0);
 
   // trade chiusi la cui chiusura (ultima uscita) cade nel periodo
-  const closed = withD.filter(x => x.d.status === 'closed' && (!from || x.d.lastExitDate >= from));
+  const closed = withD.filter(x => x.d.status === 'closed' && inRange(x.d.lastExitDate));
 
   const wins = closed.filter(x => x.d.realized > 0);
   const losses = closed.filter(x => x.d.realized < 0);
@@ -378,7 +385,7 @@ function computeStats() {
   const curve = [];
   if (cap != null) {
     let eq = equityStart;
-    curve.push({ date: null, label: from ? 'Inizio periodo' : 'Inizio', equity: eq, pnl: 0, symbol: null });
+    curve.push({ date: null, label: filtered ? 'Inizio periodo' : 'Inizio', equity: eq, pnl: 0, symbol: null });
     for (const ev of eventsIn) {
       eq += ev.pnl;
       curve.push({ date: ev.date, label: ev.date, equity: eq, pnl: ev.pnl, symbol: ev.symbol });
@@ -394,7 +401,7 @@ function computeStats() {
   return { withD, closed, openCount, pnlPeriod, equityNow, equityStart, winRate, profitFactor,
            avgWin, avgLoss, expectancy, best, worst, avgDays, curve,
            maxDD: curve.length ? maxDD : null, maxDDPct, grossProfit, grossLoss,
-           from, period, hasAnyExit: events.length > 0 };
+           from, to, filtered, period, hasAnyExit: events.length > 0 };
 }
 
 /* ---------------- formattazione ---------------- */
@@ -413,7 +420,7 @@ function cssVar(name) { return getComputedStyle(document.documentElement).getPro
 
 /* ---------------- render: statistiche ---------------- */
 function renderStats(S) {
-  const inPeriod = !!S.from;
+  const inPeriod = S.filtered;
   const roiPct = (S.equityStart > 0) ? S.pnlPeriod / S.equityStart * 100 : null;
   const pf = S.profitFactor === Infinity ? '∞' : (S.profitFactor == null ? '—' : S.profitFactor.toLocaleString('it-IT', { maximumFractionDigits: 2 }));
   const tiles = [
@@ -472,7 +479,7 @@ function renderEquityChart(S) {
   box.innerHTML = '';
   if (!S.curve.length || S.curve.length < 2) {
     const msg = state.initialCapital == null ? 'Imposta il capitale iniziale per vedere la curva equity.'
-      : (S.hasAnyExit && S.from) ? 'Nessuna uscita nel periodo selezionato.'
+      : (S.hasAnyExit && S.filtered) ? 'Nessuna uscita nel periodo selezionato.'
       : 'La curva compare dopo la prima uscita registrata.';
     box.innerHTML = `<div class="empty-msg">${msg}</div>`;
     return;
@@ -546,7 +553,7 @@ function renderPnlChart(S) {
     .slice()
     .sort((a, b) => (a.d.lastExitDate || '').localeCompare(b.d.lastExitDate || ''));
   if (!closed.length) {
-    box.innerHTML = `<div class="empty-msg">${S.from ? 'Nessun trade chiuso nel periodo selezionato.' : 'Il grafico compare quando chiudi il primo trade.'}</div>`;
+    box.innerHTML = `<div class="empty-msg">${S.filtered ? 'Nessun trade chiuso nel periodo selezionato.' : 'Il grafico compare quando chiudi il primo trade.'}</div>`;
     return;
   }
   const W = box.clientWidth || 500, H = 260;
@@ -682,9 +689,18 @@ function buildDetailRow(t, d) {
 function renderPeriodBar(S) {
   const bar = document.getElementById('periodBar');
   const active = S.period.id;
-  bar.innerHTML = '<span class="plabel">Periodo</span>' +
-    PERIODS.map(p => `<button type="button" class="chip${active === p.id ? ' active' : ''}" data-period="${p.id}" aria-pressed="${active === p.id}">${p.label}</button>`).join('') +
-    `<span class="period-range">${S.from ? 'dal ' + fmtDate(S.from) + ' a oggi' : 'tutte le date'}</span>`;
+  let html = '<span class="plabel">Periodo</span>' +
+    PERIODS.map(p => `<button type="button" class="chip${active === p.id ? ' active' : ''}" data-period="${p.id}" aria-pressed="${active === p.id}">${p.label}</button>`).join('');
+  if (active === 'custom') {
+    html += `<label class="plabel" for="customFrom">da</label>
+      <input type="date" id="customFrom" value="${state.customFrom || ''}" style="width:auto;padding:4px 8px;font-size:.8rem">
+      <label class="plabel" for="customTo">a</label>
+      <input type="date" id="customTo" value="${state.customTo || ''}" style="width:auto;padding:4px 8px;font-size:.8rem">`;
+  }
+  const rangeTxt = !S.filtered ? 'tutte le date'
+    : `dal ${S.from ? fmtDate(S.from) : 'inizio'} ${S.to ? 'al ' + fmtDate(S.to) : 'a oggi'}`;
+  html += `<span class="period-range">${rangeTxt}</span>`;
+  bar.innerHTML = html;
   const tag = S.period.long ? '· ' + S.period.long : '';
   document.getElementById('eqPtag').textContent = tag;
   document.getElementById('pnlPtag').textContent = tag;
@@ -693,6 +709,15 @@ document.getElementById('periodBar').addEventListener('click', ev => {
   const b = ev.target.closest('button[data-period]');
   if (!b) return;
   state.period = b.dataset.period;
+  save(); renderAll();
+});
+document.getElementById('periodBar').addEventListener('change', ev => {
+  if (ev.target.id !== 'customFrom' && ev.target.id !== 'customTo') return;
+  let f = document.getElementById('customFrom').value || null;
+  let t = document.getElementById('customTo').value || null;
+  if (f && t && f > t) [f, t] = [t, f]; // date invertite: le scambio
+  state.customFrom = f;
+  state.customTo = t;
   save(); renderAll();
 });
 
